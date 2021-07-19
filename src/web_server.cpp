@@ -2,6 +2,7 @@
 #include <string>
 #include <sstream>
 #include <iomanip>
+#include <set>
 
 #include "constants.hpp"
 #include "types.hpp"
@@ -61,18 +62,41 @@ static void ev_handler(struct mg_connection* nc, int ev, void* p) {
             if (it.empty()) {
                 data = "{\"suggestions\":[\"value\":\"\",\"data\":\"\"]}\n";
             } else {
+                std::set<std::string> already_included_words;
                 data = "{\"suggestions\":[";
+                size_t conjunctive_topk_length = it.size();
                 for (size_t i = 0; i != it.size(); ++i, ++it) {
                     auto completion = *it;
                     if (i > 0) data += ",";
-                    data += "{\"value\":\"" +
-                            escape_json(std::string(completion.string.begin,
-                                                    completion.string.end)) +
-                            "\",";
+                    auto completion_string = escape_json(std::string(completion.string.begin,
+                                                    completion.string.end));
+                    already_included_words.insert(completion_string);
+                    std::cout << "Word from conjunctive model: " << completion_string << std::endl;
+                    data += "{\"value\":\"" + completion_string + "\",";
                     data += "\"data\":\"" + std::to_string(i) + "\"}";
+                }
+
+                if (conjunctive_topk_length < k) {
+                    auto prefix_topk_result_iter = topk_index.prefix_topk(query, k, probe);
+                    size_t prefix_topk_result_size = prefix_topk_result_iter.size();
+
+                    for (size_t j = 0; j < prefix_topk_result_size; ++j, ++prefix_topk_result_iter) {
+                        auto completion = *prefix_topk_result_iter;
+                        auto completion_string = escape_json(std::string(completion.string.begin,
+                                                    completion.string.end));
+                        if (already_included_words.find(completion_string) == already_included_words.end()) {
+                            data += ",";
+                            data += "{\"value\":\"" + completion_string + "\",";
+                            std::cout << "Word from prefix model: " << completion_string << std::endl;
+                            data += "\"data\":\"" + std::to_string(conjunctive_topk_length + j) + "\"}";
+                        } else {
+                            std::cout << "Ignoring word \"" << completion_string << "\" because already present in suggestion" << std::endl;
+                        }
+                    }
                 }
                 data += "]}\n";
             }
+            std::cout << "final data: " << data << std::endl;
             /* Send headers */
             mg_printf(nc, "%s",
                       "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n");
